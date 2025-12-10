@@ -1,4 +1,5 @@
 import os
+from datetime import datetime 
 
 import streamlit as st
 import pandas as pd
@@ -37,6 +38,7 @@ font_path = os.path.join(os.path.dirname(__file__), "NanumGothic.ttf")
 font_prop = fm.FontProperties(fname=font_path)
 
 plt.rcParams["axes.unicode_minus"] = False  # 마이너스 깨짐 방지
+
 # -------------------------
 # 데이터 로딩
 # -------------------------
@@ -184,44 +186,64 @@ with tab_hist:
         df_a["월세금(만원)"].dropna().values,
         df_b["월세금(만원)"].dropna().values,
     ])
+    # 0원 이하 값 제거
+    all_rent = all_rent[all_rent > 0]
 
-    x_max = np.percentile(all_rent, 99)   # 상위 1% 잘라내기
-    for ax, (label, d) in zip(axes, datasets):
-        # 결측치 제거
-        data = d["월세금(만원)"].dropna()
+    if len(all_rent) == 0:
+        st.warning("월세 데이터가 없습니다.")
+    else:
+        x_max = np.percentile(all_rent, 99)   # 상위 1% 잘라내기
 
-        if len(data) == 0:
-            # 데이터가 없을 때 표시
-            ax.text(0.5, 0.5, "데이터 없음", ha="center", va="center", fontproperties=font_prop)
-            ax.set_axis_off()
-            continue
+        for ax, (label, d) in zip(axes, datasets):
+            # 결측치 제거 및 0원 이하 제거
+            data = d["월세금(만원)"].dropna()
+            data = data[data > 0]
 
-        # 🔹 각 지역별로 '비율(%)'이 되도록 정규화
-        #    → 막대 높이 = (해당 구간 비중 * 100)
-        weights = np.ones_like(data, dtype=float) / len(data) * 100
+            if len(data) == 0:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "데이터 없음",
+                    ha="center",
+                    va="center",
+                    fontproperties=font_prop,
+                )
+                ax.set_axis_off()
+                continue
 
-        ax.hist(
-            data,
-            bins=bins,
-            weights=weights,      # y축을 비율(%)로 만들기 위한 가중치
-            alpha=0.7,
-            edgecolor="black",
+            # 🔹 서울 전체 기준 상위 1% 초과 값은 히스토그램에서 제외
+            data = data[data <= x_max]
+
+            # 🔹 각 지역별로 '비율(%)'이 되도록 정규화
+            #    → 막대 높이 = (해당 구간 비중 * 100)
+            weights = np.ones_like(data, dtype=float) / len(data) * 100
+
+            ax.hist(
+                data,
+                bins=bins,
+                range=(0, x_max),   # bin 경계를 0~x_max로 고정
+                weights=weights,    # y축을 비율(%)로 만들기 위한 가중치
+                alpha=0.7,
+                edgecolor="black",
+            )
+            ax.set_title(f"{label} (n={len(data)})", fontproperties=font_prop)
+            ax.set_xlabel("월세 (만원)", fontproperties=font_prop)
+            ax.set_ylabel("비율(%)", fontproperties=font_prop)
+            ax.set_xlim(0, x_max)
+
+            for tick in ax.get_xticklabels():
+                tick.set_fontproperties(font_prop)
+            for tick in ax.get_yticklabels():
+                tick.set_fontproperties(font_prop)
+
+        plt.tight_layout()
+        st.pyplot(fig)
+
+        st.caption(
+            "- 서울 전체와 두 개 구의 월세 분포를 **비율(%) 기준**으로 동시에 비교할 수 있습니다.\n"
+            "- 서울 전체 기준 상위 1% 초과 고가 월세는 히스토그램에서 제외하고, 꼬리(극단값)로 따로 해석하면 됩니다.\n"
+            "- 오른쪽 꼬리가 길수록 고가 월세가 일부 존재한다는 뜻으로 해석할 수 있습니다."
         )
-        ax.set_title(f"{label} (n={len(data)})", fontproperties=font_prop)
-        ax.set_xlabel("월세 (만원)", fontproperties=font_prop)
-        ax.set_ylabel("비율(%)", fontproperties=font_prop)
-        # 🔹 x축 범위 공통 적용
-        ax.set_xlim(0, x_max)
-        
-    plt.tight_layout()
-    st.pyplot(fig)
-
-    st.caption(
-        "- 서울 전체와 두 개 구의 월세 분포를 **비율(%) 기준**으로 동시에 비교할 수 있습니다.\n"
-        "- 표본 수가 달라도 각 구간의 상대적인 비중을 비교할 수 있기 때문에 분포 모양을 한 눈에 볼 수 있습니다.\n"
-        "- 여전히 오른쪽 꼬리가 길수록 고가 월세가 일부 존재한다는 뜻으로 해석할 수 있습니다."
-    )
-
 # =====================================
 # 2. BoxPlot – 신·중축 vs 구축 월세 비교
 # =====================================
@@ -247,24 +269,22 @@ with tab_box:
         if valid_years.empty:
             st.warning("건축년도 정보가 거의 없어 BoxPlot을 그릴 수 없습니다.")
         else:
-            year_min = int(valid_years.min())
-            year_max = int(valid_years.max())
+            AGE_CUTOFF = 20
+            current_year = datetime.now().year
 
-            # 신·중축 vs 구축 기준이 되는 건축년도 슬라이더
-            new_cut = st.slider(
-                "신·중축 기준 건축년도 (이 해 이상이면 '신·중축', 미만이면 '구축')",
-                min_value=year_min,
-                max_value=year_max,
-                value=min(2010, year_max),
+            st.markdown(
+                f"신·중축 vs 구축 기준: **건축 후 {AGE_CUTOFF}년 이하 → '신·중축', "
+                f"{AGE_CUTOFF}년 초과 → '구축'** (기준연도: {current_year}년)"
             )
 
             def add_age_group(d: pd.DataFrame) -> pd.DataFrame:
                 # 건축년도와 선택한 월세 컬럼 둘 다 있는 행만 사용
                 d2 = d.dropna(subset=["건축년도", rent_col]).copy()
+                d2["연식"] = current_year - d2["건축년도"]
                 d2["연식그룹"] = np.where(
-                    d2["건축년도"] >= new_cut,
+                    d2["연식"] <= AGE_CUTOFF,
                     "신·중축",
-                    "구축"
+                    "구축",
                 )
                 return d2
 
@@ -272,6 +292,50 @@ with tab_box:
             a_age = add_age_group(df_a)
             b_age = add_age_group(df_b)
 
+            region_datasets_age = [
+                ("서울 전체", seoul_age),
+                (f"{gu_a}", a_age),
+                (f"{gu_b}", b_age),
+            ]
+
+            # -------------------------------
+            # 2-1) 연식 분포 히스토그램 (위)
+            # -------------------------------
+            fig_age, axes_age = plt.subplots(1, 3, figsize=(18, 4), sharey=True)
+
+            for ax, (label, d) in zip(axes_age, region_datasets_age):
+                if d.empty:
+                    ax.text(
+                        0.5,
+                        0.5,
+                        "데이터 부족",
+                        ha="center",
+                        va="center",
+                        fontproperties=font_prop,
+                    )
+                    ax.set_axis_off()
+                    continue
+
+                counts = d["연식그룹"].value_counts()
+                counts = counts.reindex(["신·중축", "구축"])
+                ratios = counts / counts.sum() * 100
+
+                ax.bar(ratios.index, ratios.values)
+                ax.set_ylim(0, 100)
+                ax.set_title(f"{label} (n={int(counts.sum())})", fontproperties=font_prop)
+                ax.set_ylabel("비율(%)", fontproperties=font_prop)
+
+                for tick in ax.get_xticklabels():
+                    tick.set_fontproperties(font_prop)
+                for tick in ax.get_yticklabels():
+                    tick.set_fontproperties(font_prop)
+
+            plt.tight_layout()
+            st.pyplot(fig_age)
+
+            # -------------------------------
+            # 2-2) 신·중축 vs 구축 월세 BoxPlot (아래)
+            # -------------------------------
             fig2, axes2 = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
 
             region_datasets = [
@@ -283,7 +347,7 @@ with tab_box:
             for ax, (label, d) in zip(axes2, region_datasets):
                 # 데이터가 없거나, 한 그룹만 있으면 표시 X
                 if d.empty or d["연식그룹"].nunique() < 2:
-                    ax.set_title(f"{label}\n데이터 부족")
+                    ax.set_title(f"{label}\n데이터 부족", fontproperties=font_prop)
                     ax.axis("off")
                     continue
 
@@ -293,11 +357,15 @@ with tab_box:
                     ax=ax,
                     grid=False,
                 )
-                ax.set_title(label)
-                ax.set_xlabel("")
-                ax.set_ylabel(y_label)
+                ax.set_title(label, fontproperties=font_prop)
+                ax.set_xlabel("", fontproperties=font_prop)
+                ax.set_ylabel(y_label, fontproperties=font_prop)
 
-            # 상단 기본 suptitle 제거 (streamlit과 한글 폰트 설정은 히스토그램과 동일하게 전역 설정 사용)
+                for tick in ax.get_xticklabels():
+                    tick.set_fontproperties(font_prop)
+                for tick in ax.get_yticklabels():
+                    tick.set_fontproperties(font_prop)
+
             plt.suptitle("")
             plt.tight_layout()
             st.pyplot(fig2)
@@ -334,7 +402,6 @@ with tab_box:
                 "- 신·중축의 중앙값이 구축보다 높으면, 같은 면적 대비 월세 부담이 더 크다는 뜻입니다.\n"
                 "- 신·중축 상자의 폭(IQR)이 넓으면, 신축·중축 주택의 가격 분산이 크다는 의미로 해석할 수 있습니다."
             )
-
 # =====================================
 # 3. Scatter Plot – 보증금 vs 월세
 # =====================================
@@ -367,14 +434,19 @@ with tab_scatter:
             [("서울 전체", seoul_s), (f"{gu_a}", a_s), (f"{gu_b}", b_s)],
         ):
             if d.empty:
-                ax.set_title(f"{label}\n데이터 부족")
+                ax.set_title(f"{label}\n데이터 부족", fontproperties=font_prop)
                 ax.axis("off")
                 continue
 
             ax.scatter(d["보증금(만원)"], d["월세금(만원)"], alpha=0.4, s=10)
-            ax.set_title(f"{label} (n={len(d)})")
-            ax.set_xlabel("보증금 (만원)")
-            ax.set_ylabel("월세 (만원)")
+            ax.set_title(f"{label} (n={len(d)})", fontproperties=font_prop)
+            ax.set_xlabel("보증금 (만원)", fontproperties=font_prop)
+            ax.set_ylabel("월세 (만원)", fontproperties=font_prop)
+
+            for tick in ax.get_xticklabels():
+                tick.set_fontproperties(font_prop)
+            for tick in ax.get_yticklabels():
+                tick.set_fontproperties(font_prop)
 
         plt.tight_layout()
         st.pyplot(fig3)
@@ -399,17 +471,17 @@ with tab_qq:
     highlight_name = None
     idx_seoul, idx_a, idx_b = [], [], []
 
-    # 1) 사용자에게 매물 이름 입력받기
+    # 1) 사용자에게 매물 이름 입력받기 (검색창)
     if building_col is not None:
         highlight_name = st.text_input(
             f"Q-Q Plot에서 확인하고 싶은 {building_col} 이름을 입력하세요 (부분일치 가능)"
         )
 
-        def find_idx(df):
+        def find_idx(df_in: pd.DataFrame):
             if not highlight_name:
                 return []
-            cand = df[
-                df[building_col]
+            cand = df_in[
+                df_in[building_col]
                 .astype(str)
                 .str.contains(highlight_name, case=False, na=False)
             ]
@@ -429,8 +501,8 @@ with tab_qq:
         st.caption("※ 단지명/건물명 컬럼이 없어 개별 매물 표시 기능은 비활성화됩니다.")
 
     # 2) QQ Plot 함수: DataFrame + highlight index를 받아서 그림
-    def qq_plot(ax, df: pd.DataFrame, label: str, highlight_idx=None):
-        data = df["월세금(만원)"].dropna()
+    def qq_plot(ax, df_in: pd.DataFrame, label: str, highlight_idx=None):
+        data = df_in["월세금(만원)"].dropna()
         if len(data) < 10:
             ax.set_title(f"{label}\n데이터 부족", fontproperties=font_prop)
             ax.axis("off")
@@ -467,9 +539,9 @@ with tab_qq:
                 )
 
                 # 너무 많으면 복잡하니 앞 몇 개만 이름 라벨링
-                if building_col is not None and building_col in df.columns:
+                if building_col is not None and building_col in df_in.columns:
                     for idx_row, row in pts.head(3).iterrows():
-                        name = str(df.loc[idx_row, building_col])
+                        name = str(df_in.loc[idx_row, building_col])
                         ax.annotate(
                             name,
                             (row["osm"], row["osr"]),
@@ -484,11 +556,16 @@ with tab_qq:
 
         ax.set_title(
             f"{label} (n={len(data)}, R={r:.2f})",
-            fontproperties=font_prop,          # 제목 한글
+            fontproperties=font_prop,
         )
         ax.set_xlabel("이론 분위수 (정규분포)", fontproperties=font_prop)
         ax.set_ylabel("관측 월세 (만원)", fontproperties=font_prop)
-        ax.legend(loc="best", fontsize=8, prop=font_prop)  # 범례 한글
+        ax.legend(loc="best", fontsize=8, prop=font_prop)
+
+        for tick in ax.get_xticklabels():
+            tick.set_fontproperties(font_prop)
+        for tick in ax.get_yticklabels():
+            tick.set_fontproperties(font_prop)
 
     # 3) 서브플롯 3개 그리기
     fig4, axes4 = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
