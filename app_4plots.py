@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy import stats
+import matplotlib.font_manager as fm
 
 # -------------------------
 # 기본 설정
@@ -29,6 +30,17 @@ st.markdown(
     좌측에서 주택유형을 선택하고, 각 탭에서 비교할 구를 고르면 됩니다.
     """
 )
+
+# ---- 한글 폰트(NanumGothic) 설정 ----
+# fonts/NanumGothic.ttf 위치는 프로젝트 구조에 맞게 필요하면 수정
+font_path = os.path.join(os.path.dirname(__file__), "fonts", "NanumGothic.ttf")
+
+if os.path.exists(font_path):
+    fm.fontManager.addfont(font_path)
+    plt.rcParams["font.family"] = "NanumGothic"
+
+# 마이너스 깨짐 방지
+plt.rcParams["axes.unicode_minus"] = False
 
 # -------------------------
 # 데이터 로딩
@@ -159,8 +171,10 @@ tab_hist, tab_box, tab_scatter, tab_qq = st.tabs(
 with tab_hist:
     st.subheader("1. 히스토그램 – 월세 분포 분석")
 
+    # bin 개수 슬라이더
     bins = st.slider("bin 개수 (구간 수)", min_value=10, max_value=60, value=30, step=5)
 
+    # 한 줄에 3개의 히스토그램 (서울 전체 / 구 A / 구 B)
     fig, axes = plt.subplots(1, 3, figsize=(18, 4), sharey=True)
 
     datasets = [
@@ -170,18 +184,37 @@ with tab_hist:
     ]
 
     for ax, (label, d) in zip(axes, datasets):
+        # 결측치 제거
         data = d["월세금(만원)"].dropna()
-        ax.hist(data, bins=bins, alpha=0.7, edgecolor="black")
+
+        if len(data) == 0:
+            # 데이터가 없을 때 표시
+            ax.text(0.5, 0.5, "데이터 없음", ha="center", va="center")
+            ax.set_axis_off()
+            continue
+
+        # 🔹 각 지역별로 '비율(%)'이 되도록 정규화
+        #    → 막대 높이 = (해당 구간 비중 * 100)
+        weights = np.ones_like(data, dtype=float) / len(data) * 100
+
+        ax.hist(
+            data,
+            bins=bins,
+            weights=weights,      # y축을 비율(%)로 만들기 위한 가중치
+            alpha=0.7,
+            edgecolor="black",
+        )
         ax.set_title(f"{label} (n={len(data)})")
         ax.set_xlabel("월세 (만원)")
-        ax.set_ylabel("거래 건수")
+        ax.set_ylabel("비율(%)")
 
     plt.tight_layout()
     st.pyplot(fig)
 
     st.caption(
-        "- 서울 전체와 두 개 구의 월세 분포를 동시에 비교할 수 있습니다.\n"
-        "- 오른쪽 꼬리가 길수록 고가 월세가 일부 존재한다는 뜻입니다."
+        "- 서울 전체와 두 개 구의 월세 분포를 **비율(%) 기준**으로 동시에 비교할 수 있습니다.\n"
+        "- 표본 수가 달라도 각 구간의 상대적인 비중을 비교할 수 있기 때문에 분포 모양을 한 눈에 볼 수 있습니다.\n"
+        "- 여전히 오른쪽 꼬리가 길수록 고가 월세가 일부 존재한다는 뜻으로 해석할 수 있습니다."
     )
 
 # =====================================
