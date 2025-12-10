@@ -223,14 +223,26 @@ with tab_hist:
     )
 
 # =====================================
-# 2. BoxPlot – 신축 vs 노후주택 월세 비교
+# 2. BoxPlot – 신·중축 vs 구축 월세 비교
 # =====================================
 with tab_box:
-    st.subheader("2. BoxPlot – 신축 vs 노후주택 월세 비교")
+    st.subheader("2. BoxPlot – 신·중축 vs 구축 ㎡당 월세 비교")
 
+    # 0) 기본 컬럼 체크
     if "건축년도" not in df_filtered.columns:
         st.warning("데이터에 '건축년도' 컬럼이 없어 BoxPlot을 그릴 수 없습니다.")
     else:
+        # 어떤 월세 컬럼을 쓸지 결정 (전용면적당 월세 우선, 없으면 월세금 사용)
+        if "전용면적당 월세(만원/㎡)" in df_filtered.columns:
+            rent_col = "전용면적당 월세(만원/㎡)"
+            y_label = "전용면적당 월세 (만원/㎡)"
+        elif "월세금(만원)" in df_filtered.columns:
+            rent_col = "월세금(만원)"
+            y_label = "월세 (만원)"
+        else:
+            st.warning("월세 관련 컬럼이 없어 BoxPlot을 그릴 수 없습니다.")
+            st.stop()
+
         valid_years = df_filtered["건축년도"].dropna()
         if valid_years.empty:
             st.warning("건축년도 정보가 거의 없어 BoxPlot을 그릴 수 없습니다.")
@@ -238,17 +250,23 @@ with tab_box:
             year_min = int(valid_years.min())
             year_max = int(valid_years.max())
 
+            # 신·중축 vs 구축 기준이 되는 건축년도 슬라이더
             new_cut = st.slider(
-                "신축 기준 건축년도 (이 해 이상이면 '신축', 미만이면 '노후주택')",
+                "신·중축 기준 건축년도 (이 해 이상이면 '신·중축', 미만이면 '구축')",
                 min_value=year_min,
                 max_value=year_max,
                 value=min(2010, year_max),
             )
 
             def add_age_group(d: pd.DataFrame) -> pd.DataFrame:
-                d = d.dropna(subset=["건축년도", "월세금(만원)"]).copy()
-                d["연식그룹"] = np.where(d["건축년도"] >= new_cut, "신축", "노후주택")
-                return d
+                # 건축년도와 선택한 월세 컬럼 둘 다 있는 행만 사용
+                d2 = d.dropna(subset=["건축년도", rent_col]).copy()
+                d2["연식그룹"] = np.where(
+                    d2["건축년도"] >= new_cut,
+                    "신·중축",
+                    "구축"
+                )
+                return d2
 
             seoul_age = add_age_group(seoul)
             a_age = add_age_group(df_a)
@@ -256,32 +274,65 @@ with tab_box:
 
             fig2, axes2 = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
 
-            for ax, (label, d) in zip(
-                axes2,
-                [("서울 전체", seoul_age), (f"{gu_a}", a_age), (f"{gu_b}", b_age)],
-            ):
+            region_datasets = [
+                ("서울 전체", seoul_age),
+                (f"{gu_a}", a_age),
+                (f"{gu_b}", b_age),
+            ]
+
+            for ax, (label, d) in zip(axes2, region_datasets):
+                # 데이터가 없거나, 한 그룹만 있으면 표시 X
                 if d.empty or d["연식그룹"].nunique() < 2:
                     ax.set_title(f"{label}\n데이터 부족")
                     ax.axis("off")
                     continue
 
                 d.boxplot(
-                    column="월세금(만원)",
+                    column=rent_col,
                     by="연식그룹",
                     ax=ax,
                     grid=False,
                 )
                 ax.set_title(label)
                 ax.set_xlabel("")
-                ax.set_ylabel("월세 (만원)")
+                ax.set_ylabel(y_label)
 
+            # 상단 기본 suptitle 제거 (streamlit과 한글 폰트 설정은 히스토그램과 동일하게 전역 설정 사용)
             plt.suptitle("")
             plt.tight_layout()
             st.pyplot(fig2)
 
+            # 요약 통계표 (발표/해석용)
+            summary_list = []
+            for region_label, d in region_datasets:
+                if d.empty or d["연식그룹"].nunique() == 0:
+                    continue
+
+                s = (
+                    d.groupby("연식그룹")[rent_col]
+                    .describe()[["count", "25%", "50%", "75%"]]
+                    .rename(
+                        columns={
+                            "count": "표본수",
+                            "25%": "1분위(Q1)",
+                            "50%": "중앙값(Q2)",
+                            "75%": "3분위(Q3)",
+                        }
+                    )
+                    .reset_index()
+                )
+                s.insert(0, "지역", region_label)
+                summary_list.append(s)
+
+            if summary_list:
+                st.write("##### 신·중축 vs 구축 ㎡당 월세 요약 통계")
+                summary_df = pd.concat(summary_list, ignore_index=True)
+                st.dataframe(summary_df)
+
             st.caption(
-                "- 각 영역에서 **신축 vs 노후주택의 월세 수준과 변동성(IQR)**을 비교할 수 있습니다.\n"
-                "- 신축의 중앙값이 높고 상자 폭이 크면, 신축 프리미엄과 함께 가격 분산도 크다는 뜻입니다."
+                "- 동일 면적 기준으로 **신·중축 vs 구축의 ㎡당 월세 수준과 변동성(IQR)**을 비교할 수 있습니다.\n"
+                "- 신·중축의 중앙값이 구축보다 높으면, 같은 면적 대비 월세 부담이 더 크다는 뜻입니다.\n"
+                "- 신·중축 상자의 폭(IQR)이 넓으면, 신축·중축 주택의 가격 분산이 크다는 의미로 해석할 수 있습니다."
             )
 
 # =====================================
@@ -332,38 +383,125 @@ with tab_scatter:
             "- 같은 보증금 수준에서 점들이 더 **위쪽에 몰린 구**는 `보증금 대비 월세 부담이 큰 구`로 해석할 수 있습니다.\n"
             "- 반대로 같은 보증금에서 월세가 상대적으로 낮으면 `보증금 위주 계약이 많은 구`로 이야기할 수 있습니다."
         )
-
 # =====================================
 # 4. Q-Q Plot – 서울 vs 구A vs 구B
 # =====================================
 with tab_qq:
     st.subheader("4. Q-Q Plot – 정규성 & Outlier (서울 vs 구A vs 구B)")
 
-    def qq_plot(ax, data: pd.Series, label: str):
-        data = data.dropna()
+    # 0) 단지명 / 건물명 컬럼 찾기
+    building_col = None
+    for col in ["단지명", "건물명"]:
+        if col in seoul.columns:
+            building_col = col
+            break
+
+    highlight_name = None
+    idx_seoul, idx_a, idx_b = [], [], []
+
+    # 1) 사용자에게 매물 이름 입력받기
+    if building_col is not None:
+        highlight_name = st.text_input(
+            f"Q-Q Plot에서 확인하고 싶은 {building_col} 이름을 입력하세요 (부분일치 가능)"
+        )
+
+        def find_idx(df):
+            if not highlight_name:
+                return []
+            cand = df[
+                df[building_col]
+                .astype(str)
+                .str.contains(highlight_name, case=False, na=False)
+            ]
+            return cand.index.tolist()
+
+        if highlight_name:
+            idx_seoul = find_idx(seoul)
+            idx_a = find_idx(df_a)
+            idx_b = find_idx(df_b)
+
+            total = len(set(idx_seoul) | set(idx_a) | set(idx_b))
+            if total == 0:
+                st.warning(f"'{highlight_name}'을(를) 포함하는 계약을 찾지 못했습니다.")
+            else:
+                st.info(f"'{highlight_name}'을(를) 포함하는 계약 {total}건을 찾았습니다.")
+    else:
+        st.caption("※ 단지명/건물명 컬럼이 없어 개별 매물 표시 기능은 비활성화됩니다.")
+
+    # 2) QQ Plot 함수: DataFrame + highlight index를 받아서 그림
+    def qq_plot(ax, df: pd.DataFrame, label: str, highlight_idx=None):
+        data = df["월세금(만원)"].dropna()
         if len(data) < 10:
-            ax.set_title(f"{label}\n데이터 부족")
+            ax.set_title(f"{label}\n데이터 부족", fontproperties=font_prop)
             ax.axis("off")
             return
 
-        (osm, osr), (slope, intercept, r) = stats.probplot(data, dist="norm", fit=True)
-        ax.scatter(osm, osr, alpha=0.5, s=10, label="관측값")
-        ax.plot(osm, slope * osm + intercept, color="red", linewidth=2, label="참고선")
-        ax.set_title(f"{label} (n={len(data)}, R={r:.2f})")
-        ax.set_xlabel("이론 분위수 (정규분포)")
-        ax.set_ylabel("관측 월세 (만원)")
-        ax.legend(loc="best", fontsize=8)
+        # 정렬하면서 원래 index 유지
+        sorted_data = data.sort_values()
 
+        # probplot은 값만 넘기고, index는 따로 DataFrame으로 붙이기
+        (osm, osr), (slope, intercept, r) = stats.probplot(
+            sorted_data.values, dist="norm", fit=True
+        )
+
+        qq_df = pd.DataFrame(
+            {"osm": osm, "osr": osr},
+            index=sorted_data.index,  # ← 원래 행 index
+        )
+
+        # 전체 점
+        ax.scatter(qq_df["osm"], qq_df["osr"], alpha=0.5, s=10, label="관측값")
+
+        # 선택 매물 강조
+        if highlight_idx:
+            pts = qq_df.loc[qq_df.index.isin(highlight_idx)]
+            if not pts.empty:
+                ax.scatter(
+                    pts["osm"],
+                    pts["osr"],
+                    s=80,
+                    facecolors="none",
+                    edgecolors="orange",
+                    linewidths=2,
+                    label="선택 매물",
+                )
+
+                # 너무 많으면 복잡하니 앞 몇 개만 이름 라벨링
+                if building_col is not None and building_col in df.columns:
+                    for idx_row, row in pts.head(3).iterrows():
+                        name = str(df.loc[idx_row, building_col])
+                        ax.annotate(
+                            name,
+                            (row["osm"], row["osr"]),
+                            xytext=(3, 3),
+                            textcoords="offset points",
+                            fontsize=7,
+                            fontproperties=font_prop,  # ← 한글 라벨
+                        )
+
+        # 참고선
+        ax.plot(osm, slope * osm + intercept, color="red", linewidth=2, label="참고선")
+
+        ax.set_title(
+            f"{label} (n={len(data)}, R={r:.2f})",
+            fontproperties=font_prop,          # 제목 한글
+        )
+        ax.set_xlabel("이론 분위수 (정규분포)", fontproperties=font_prop)
+        ax.set_ylabel("관측 월세 (만원)", fontproperties=font_prop)
+        ax.legend(loc="best", fontsize=8, prop=font_prop)  # 범례 한글
+
+    # 3) 서브플롯 3개 그리기
     fig4, axes4 = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
 
-    qq_plot(axes4[0], seoul["월세금(만원)"], "서울 전체")
-    qq_plot(axes4[1], df_a["월세금(만원)"], gu_a)
-    qq_plot(axes4[2], df_b["월세금(만원)"], gu_b)
+    qq_plot(axes4[0], seoul, "서울 전체", highlight_idx=idx_seoul)
+    qq_plot(axes4[1], df_a, gu_a, highlight_idx=idx_a)
+    qq_plot(axes4[2], df_b, gu_b, highlight_idx=idx_b)
 
     plt.tight_layout()
     st.pyplot(fig4)
 
     st.caption(
         "- 직선에서 크게 벗어난 점들이 **Outlier(극단값)**입니다.\n"
-        "- 서울 전체와 각 구의 Q-Q Plot을 비교해 보면, 어떤 구에서 고가 월세 Outlier가 더 많이 나타나는지 설명할 수 있습니다."
+        "- 서울 전체와 각 구의 Q-Q Plot을 비교해 보면, 어떤 구에서 고가 월세 Outlier가 더 많이 나타나는지 설명할 수 있습니다.\n"
+        "- 상단 입력창에 매물 이름을 입력하면, 해당 매물이 Q-Q Plot 상에서 어느 위치(극단값인지/평균 근처인지)에 있는지 확인할 수 있습니다."
     )
