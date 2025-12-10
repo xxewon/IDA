@@ -33,15 +33,10 @@ st.markdown(
 
 # ---- 한글 폰트(NanumGothic) 설정 ----
 # fonts/NanumGothic.ttf 위치는 프로젝트 구조에 맞게 필요하면 수정
-font_path = os.path.join(os.path.dirname(__file__), "fonts", "NanumGothic.ttf")
+font_path = os.path.join(os.path.dirname(__file__), "NanumGothic.ttf")
+font_prop = fm.FontProperties(fname=font_path)
 
-if os.path.exists(font_path):
-    fm.fontManager.addfont(font_path)
-    plt.rcParams["font.family"] = "NanumGothic"
-
-# 마이너스 깨짐 방지
-plt.rcParams["axes.unicode_minus"] = False
-
+plt.rcParams["axes.unicode_minus"] = False  # 마이너스 깨짐 방지
 # -------------------------
 # 데이터 로딩
 # -------------------------
@@ -169,7 +164,7 @@ tab_hist, tab_box, tab_scatter, tab_qq = st.tabs(
 # 1. 히스토그램 – 월세 분포 분석
 # =====================================
 with tab_hist:
-    st.subheader("1. 히스토그램 – 월세 분포 분석")
+    st.subheader("1. 히스토그램 - 월세 분포 분석")
 
     # bin 개수 슬라이더
     bins = st.slider("bin 개수 (구간 수)", min_value=10, max_value=60, value=30, step=5)
@@ -183,13 +178,21 @@ with tab_hist:
         (f"{gu_b}", df_b),
     ]
 
+    # 🔹 서울+두 구 전체 월세 기준으로 x축 상한 결정 (99퍼센타일)
+    all_rent = np.concatenate([
+        seoul["월세금(만원)"].dropna().values,
+        df_a["월세금(만원)"].dropna().values,
+        df_b["월세금(만원)"].dropna().values,
+    ])
+
+    x_max = np.percentile(all_rent, 99)   # 상위 1% 잘라내기
     for ax, (label, d) in zip(axes, datasets):
         # 결측치 제거
         data = d["월세금(만원)"].dropna()
 
         if len(data) == 0:
             # 데이터가 없을 때 표시
-            ax.text(0.5, 0.5, "데이터 없음", ha="center", va="center")
+            ax.text(0.5, 0.5, "데이터 없음", ha="center", va="center", fontproperties=font_prop)
             ax.set_axis_off()
             continue
 
@@ -204,10 +207,12 @@ with tab_hist:
             alpha=0.7,
             edgecolor="black",
         )
-        ax.set_title(f"{label} (n={len(data)})")
-        ax.set_xlabel("월세 (만원)")
-        ax.set_ylabel("비율(%)")
-
+        ax.set_title(f"{label} (n={len(data)})", fontproperties=font_prop)
+        ax.set_xlabel("월세 (만원)", fontproperties=font_prop)
+        ax.set_ylabel("비율(%)", fontproperties=font_prop)
+        # 🔹 x축 범위 공통 적용
+        ax.set_xlim(0, x_max)
+        
     plt.tight_layout()
     st.pyplot(fig)
 
