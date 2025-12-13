@@ -105,6 +105,7 @@ def load_data() -> pd.DataFrame:
         "월세금(만원)",
         "건축년도",
         "단지명",
+        "가격",
     ]
     keep_cols = [c for c in keep_cols if c in df.columns]
     df = df[keep_cols].copy()
@@ -164,87 +165,91 @@ tab_hist, tab_box, tab_scatter, tab_qq = st.tabs(
 )
 
 # =====================================
-# 1. 히스토그램 – 월세 분포 분석
+# 1. 히스토그램 – 가격 분포 분석
 # =====================================
 with tab_hist:
-    st.subheader("1. 히스토그램 - 월세 분포 분석")
+    st.subheader("1. 히스토그램 - 가격 분포 분석")
 
-    # bin 개수 슬라이더
-    bins = st.slider("bin 개수 (구간 수)", min_value=10, max_value=60, value=30, step=5)
-
-    # 한 줄에 3개의 히스토그램 (서울 전체 / 구 A / 구 B)
-    fig, axes = plt.subplots(1, 3, figsize=(18, 4), sharey=True)
-
-    datasets = [
-        ("서울 전체", seoul),
-        (f"{gu_a}", df_a),
-        (f"{gu_b}", df_b),
-    ]
-
-    # 🔹 서울+두 구 전체 월세 기준으로 x축 상한 결정 (99퍼센타일)
-    all_rent = np.concatenate([
-        seoul["월세금(만원)"].dropna().values,
-        df_a["월세금(만원)"].dropna().values,
-        df_b["월세금(만원)"].dropna().values,
-    ])
-    # 0원 이하 값 제거
-    all_rent = all_rent[all_rent > 0]
-
-    if len(all_rent) == 0:
-        st.warning("월세 데이터가 없습니다.")
+    # 가격 컬럼 존재 여부 체크
+    if "가격" not in df_filtered.columns:
+        st.warning("데이터에 '가격' 컬럼이 없어 히스토그램을 그릴 수 없습니다. '가격' 컬럼이 포함된 CSV를 사용하세요.")
     else:
-        x_max = np.percentile(all_rent, 99)   # 상위 1% 잘라내기
+        # bin 개수 슬라이더
+        bins = st.slider("bin 개수 (구간 수)", min_value=10, max_value=60, value=30, step=5)
 
-        for ax, (label, d) in zip(axes, datasets):
-            # 결측치 제거 및 0원 이하 제거
-            data = d["월세금(만원)"].dropna()
-            data = data[data > 0]
+        # 한 줄에 3개의 히스토그램 (서울 전체 / 구 A / 구 B)
+        fig, axes = plt.subplots(1, 3, figsize=(18, 4), sharey=True)
 
-            if len(data) == 0:
-                ax.text(
-                    0.5,
-                    0.5,
-                    "데이터 없음",
-                    ha="center",
-                    va="center",
-                    fontproperties=font_prop,
+        datasets = [
+            ("서울 전체", seoul),
+            (f"{gu_a}", df_a),
+            (f"{gu_b}", df_b),
+        ]
+
+        # 🔹 서울+두 구 전체 '가격' 기준으로 x축 상한 결정 (99퍼센타일)
+        all_price = np.concatenate([
+            seoul["가격"].dropna().values,
+            df_a["가격"].dropna().values,
+            df_b["가격"].dropna().values,
+        ])
+        # 0 이하 값 제거
+        all_price = all_price[all_price > 0]
+
+        if len(all_price) == 0:
+            st.warning("가격 데이터가 없습니다.")
+        else:
+            x_max = np.percentile(all_price, 99)   # 상위 1% 잘라내기
+
+            for ax, (label, d) in zip(axes, datasets):
+                # 결측치 제거 및 0 이하 제거
+                data = d["가격"].dropna()
+                data = data[data > 0]
+
+                if len(data) == 0:
+                    ax.text(
+                        0.5,
+                        0.5,
+                        "데이터 없음",
+                        ha="center",
+                        va="center",
+                        fontproperties=font_prop,
+                    )
+                    ax.set_axis_off()
+                    continue
+
+                # 🔹 서울 전체 기준 상위 1% 초과 값은 히스토그램에서 제외
+                data = data[data <= x_max]
+
+                # 🔹 각 지역별로 '비율(%)'이 되도록 정규화
+                #    → 막대 높이 = (해당 구간 비중 * 100)
+                weights = np.ones_like(data, dtype=float) / len(data) * 100
+
+                ax.hist(
+                    data,
+                    bins=bins,
+                    range=(0, x_max),   # bin 경계를 0~x_max로 고정
+                    weights=weights,    # y축을 비율(%)로 만들기 위한 가중치
+                    alpha=0.7,
+                    edgecolor="black",
                 )
-                ax.set_axis_off()
-                continue
+                ax.set_title(f"{label} (n={len(data)})", fontproperties=font_prop)
+                ax.set_xlabel("가격 (만원)", fontproperties=font_prop)
+                ax.set_ylabel("비율(%)", fontproperties=font_prop)
+                ax.set_xlim(0, x_max)
 
-            # 🔹 서울 전체 기준 상위 1% 초과 값은 히스토그램에서 제외
-            data = data[data <= x_max]
+                for tick in ax.get_xticklabels():
+                    tick.set_fontproperties(font_prop)
+                for tick in ax.get_yticklabels():
+                    tick.set_fontproperties(font_prop)
 
-            # 🔹 각 지역별로 '비율(%)'이 되도록 정규화
-            #    → 막대 높이 = (해당 구간 비중 * 100)
-            weights = np.ones_like(data, dtype=float) / len(data) * 100
+            plt.tight_layout()
+            st.pyplot(fig)
 
-            ax.hist(
-                data,
-                bins=bins,
-                range=(0, x_max),   # bin 경계를 0~x_max로 고정
-                weights=weights,    # y축을 비율(%)로 만들기 위한 가중치
-                alpha=0.7,
-                edgecolor="black",
+            st.caption(
+                "- 서울 전체와 두 개 구의 **전월세 가격 분포**를 비율(%) 기준으로 동시에 비교할 수 있습니다.\n"
+                "- 서울 전체 기준 상위 1% 초과 고가 매물은 히스토그램에서 제외하고, 꼬리(극단값)로 따로 해석하면 됩니다.\n"
+                "- 오른쪽 꼬리가 길수록 고가 전월세가 일부 존재한다는 뜻으로 해석할 수 있습니다."
             )
-            ax.set_title(f"{label} (n={len(data)})", fontproperties=font_prop)
-            ax.set_xlabel("월세 (만원)", fontproperties=font_prop)
-            ax.set_ylabel("비율(%)", fontproperties=font_prop)
-            ax.set_xlim(0, x_max)
-
-            for tick in ax.get_xticklabels():
-                tick.set_fontproperties(font_prop)
-            for tick in ax.get_yticklabels():
-                tick.set_fontproperties(font_prop)
-
-        plt.tight_layout()
-        st.pyplot(fig)
-
-        st.caption(
-            "- 서울 전체와 두 개 구의 월세 분포를 **비율(%) 기준**으로 동시에 비교할 수 있습니다.\n"
-            "- 서울 전체 기준 상위 1% 초과 고가 월세는 히스토그램에서 제외하고, 꼬리(극단값)로 따로 해석하면 됩니다.\n"
-            "- 오른쪽 꼬리가 길수록 고가 월세가 일부 존재한다는 뜻으로 해석할 수 있습니다."
-        )
 
 # =====================================
 # 2. BoxPlot – 신·중축 vs 구축 월세 비교
