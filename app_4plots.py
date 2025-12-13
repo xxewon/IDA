@@ -245,6 +245,7 @@ with tab_hist:
             "- 서울 전체 기준 상위 1% 초과 고가 월세는 히스토그램에서 제외하고, 꼬리(극단값)로 따로 해석하면 됩니다.\n"
             "- 오른쪽 꼬리가 길수록 고가 월세가 일부 존재한다는 뜻으로 해석할 수 있습니다."
         )
+
 # =====================================
 # 2. BoxPlot – 신·중축 vs 구축 월세 비교
 # =====================================
@@ -414,9 +415,30 @@ with tab_scatter:
     if not needed_cols.issubset(df_filtered.columns):
         st.warning("데이터에 '보증금(만원)' 또는 '월세금(만원)' 컬럼이 없어 산점도를 그릴 수 없습니다.")
     else:
+        # 1) 표시 점 개수 (무작위 샘플링)
         max_points = st.slider(
             "표시할 최대 점 개수 (무작위 샘플링)", min_value=200, max_value=5000, value=2000, step=200
         )
+
+        # 2) 축 통일 + 로그 옵션
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            x_scale = st.radio(
+                "보증금 축 스케일",
+                ["공통 선형", "공통 로그10"],
+                horizontal=True,
+                help="각 지역의 x축 범위가 달라 보증금 부담 비교가 어려우면, '공통' 축을 사용하세요. "
+                     "로그 스케일은 큰 값(고보증금)을 압축해 한 화면에서 비교하기 좋습니다.",
+            )
+        with c2:
+            clip_pct = st.slider(
+                "축 상한 컷(상위 % 제외)",
+                min_value=90,
+                max_value=100,
+                value=99,
+                step=1,
+                help="상위 극단값 때문에 대부분 점이 왼쪽에 뭉치면, 상한을 분위수로 잘라 가독성을 높입니다.",
+            )
 
         def prep_scatter(d: pd.DataFrame) -> pd.DataFrame:
             d = d.dropna(subset=["보증금(만원)", "월세금(만원)"]).copy()
@@ -425,38 +447,85 @@ with tab_scatter:
                 d = d.sample(max_points, random_state=42)
             return d
 
+        # 샘플링된 데이터 (점 표시용)
         seoul_s = prep_scatter(seoul)
         a_s = prep_scatter(df_a)
         b_s = prep_scatter(df_b)
 
-        fig3, axes3 = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
-
-        for ax, (label, d) in zip(
-            axes3,
-            [("서울 전체", seoul_s), (f"{gu_a}", a_s), (f"{gu_b}", b_s)],
-        ):
-            if d.empty:
-                ax.set_title(f"{label}\n데이터 부족", fontproperties=font_prop)
-                ax.axis("off")
-                continue
-
-            ax.scatter(d["보증금(만원)"], d["월세금(만원)"], alpha=0.4, s=10)
-            ax.set_title(f"{label} (n={len(d)})", fontproperties=font_prop)
-            ax.set_xlabel("보증금 (만원)", fontproperties=font_prop)
-            ax.set_ylabel("월세 (만원)", fontproperties=font_prop)
-
-            for tick in ax.get_xticklabels():
-                tick.set_fontproperties(font_prop)
-            for tick in ax.get_yticklabels():
-                tick.set_fontproperties(font_prop)
-
-        plt.tight_layout()
-        st.pyplot(fig3)
-
-        st.caption(
-            "- 같은 보증금 수준에서 점들이 더 **위쪽에 몰린 구**는 `보증금 대비 월세 부담이 큰 구`로 해석할 수 있습니다.\n"
-            "- 반대로 같은 보증금에서 월세가 상대적으로 낮으면 `보증금 위주 계약이 많은 구`로 이야기할 수 있습니다."
+        # 3) 공통 축 범위 계산 (샘플링 전 전체에서 분위수로 계산)
+        all_dep = pd.concat(
+            [
+                seoul["보증금(만원)"].dropna(),
+                df_a["보증금(만원)"].dropna(),
+                df_b["보증금(만원)"].dropna(),
+            ],
+            ignore_index=True,
         )
+        all_rent = pd.concat(
+            [
+                seoul["월세금(만원)"].dropna(),
+                df_a["월세금(만원)"].dropna(),
+                df_b["월세금(만원)"].dropna(),
+            ],
+            ignore_index=True,
+        )
+
+        all_dep = all_dep[all_dep > 0]
+        all_rent = all_rent[all_rent > 0]
+
+        if len(all_dep) == 0 or len(all_rent) == 0:
+            st.warning("보증금/월세 데이터가 부족하여 산점도를 그릴 수 없습니다.")
+        else:
+            q = clip_pct / 100.0
+            x_max = float(all_dep.quantile(q))
+            y_max = float(all_rent.quantile(q))
+
+            # 로그 스케일에서 하한은 0이 될 수 없으므로 안전하게 1 이상으로 설정
+            x_min_log = max(1.0, float(all_dep.quantile(0.01)))
+            y_min = 0.0
+
+            fig3, axes3 = plt.subplots(1, 3, figsize=(18, 5), sharex=True, sharey=True)
+
+            for ax, (label, d) in zip(
+                axes3,
+                [("서울 전체", seoul_s), (f"{gu_a}", a_s), (f"{gu_b}", b_s)],
+            ):
+                if d.empty:
+                    ax.set_title(f"{label}\n데이터 부족", fontproperties=font_prop)
+                    ax.axis("off")
+                    continue
+
+                ax.scatter(d["보증금(만원)"], d["월세금(만원)"], alpha=0.35, s=10)
+
+                # 공통 축 적용
+                if x_scale == "공통 로그10":
+                    ax.set_xscale("log")
+                    ax.set_xlim(x_min_log, x_max)
+                    ax.set_xlabel("보증금 (만원, 로그스케일)", fontproperties=font_prop)
+                else:
+                    ax.set_xlim(0, x_max)
+                    ax.set_xlabel("보증금 (만원)", fontproperties=font_prop)
+
+                ax.set_ylim(y_min, y_max)
+                ax.set_title(f"{label} (n={len(d)})", fontproperties=font_prop)
+                ax.set_ylabel("월세 (만원)", fontproperties=font_prop)
+
+                for tick in ax.get_xticklabels():
+                    tick.set_fontproperties(font_prop)
+                for tick in ax.get_yticklabels():
+                    tick.set_fontproperties(font_prop)
+
+            plt.tight_layout()
+            st.pyplot(fig3)
+
+            st.caption(
+                """
+                - **핵심 수정:** 3개 그래프의 보증금 축을 **공통 축**으로 통일했습니다. (상위 일부 극단값은 분위수로 제외)
+                - 같은 보증금 수준에서 점들이 더 **위쪽에 몰린 구**는 `보증금 대비 월세 부담이 큰 구`로 해석할 수 있습니다.
+                - 반대로 같은 보증금에서 월세가 상대적으로 낮으면 `보증금 위주 계약이 많은 구`로 이야기할 수 있습니다.
+                - 로그 스케일은 고보증금(우측 꼬리)을 압축해 **한 화면에서 비교**하기 좋지만, 발표에서는 필요 시 '공통 선형'도 같이 보여주면 직관적입니다.
+                """
+            )
 
 # =====================================
 # 4. Q-Q Plot – 서울 vs 구A vs 구B
