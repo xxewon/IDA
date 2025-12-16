@@ -343,13 +343,39 @@ with tab_box:
             # -------------------------------
             # 2-2) 신·중축 vs 구축 월세 BoxPlot (아래)
             # -------------------------------
-            fig2, axes2 = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
 
+            # ★ BoxPlot용 데이터 셋
             region_datasets = [
                 ("서울 전체", seoul_age),
                 (f"{gu_a}", a_age),
                 (f"{gu_b}", b_age),
             ]
+
+            # ★ 극단값 때문에 축이 너무 커지는 것을 방지하기 위해 분위수 기반 상한 슬라이더
+            clip_pct_box = st.slider(
+                "BoxPlot 축 상한 컷(상위 % 제외)",
+                min_value=90,
+                max_value=100,
+                value=95,
+                step=1,
+                help=(
+                    "극단적인 고가 월세 때문에 상자가 바닥에 붙어 보이면 "
+                    "상위를 잘라내어 박스 형태를 더 잘 보이게 합니다."
+                ),
+            )
+
+            # ★ 세 구 데이터를 합쳐서 공통 y축 상한 계산
+            all_rent_box = pd.concat(
+                [d[rent_col].dropna() for _, d in region_datasets],
+                ignore_index=True,
+            )
+            all_rent_box = all_rent_box[all_rent_box > 0]
+
+            y_max_box = None
+            if not all_rent_box.empty:
+                y_max_box = float(all_rent_box.quantile(clip_pct_box / 100.0))
+
+            fig2, axes2 = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
 
             for ax, (label, d) in zip(axes2, region_datasets):
                 # 데이터가 없거나, 한 그룹만 있으면 표시 X
@@ -364,6 +390,11 @@ with tab_box:
                     ax=ax,
                     grid=False,
                 )
+
+                # ★ 분위수 기반 공통 y축 적용 → 박스가 더 잘 보이게
+                if y_max_box is not None:
+                    ax.set_ylim(0, y_max_box)
+
                 ax.set_title(label, fontproperties=font_prop)
                 ax.set_xlabel("", fontproperties=font_prop)
                 ax.set_ylabel(y_label, fontproperties=font_prop)
