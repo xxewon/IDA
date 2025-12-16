@@ -160,8 +160,8 @@ df_b = df_filtered[df_filtered["구"] == gu_b].copy()
 # -------------------------
 # 탭 구성 (4개 분석 기능만)
 # -------------------------
-tab_hist, tab_box, tab_scatter, tab_qq = st.tabs(
-    ["1. 히스토그램", "2. BoxPlot (신축 vs 노후)", "3. Scatter Plot", "4. Q-Q Plot"]
+tab_hist, tab_box, tab_scatter, tab_qq, tab_price_box = st.tabs(
+    ["1. 히스토그램", "2. BoxPlot (신축 vs 노후)", "3. Scatter Plot", "4. Q-Q Plot", "5. BoxPlot (서울 vs 구A vs 구B 가격)"]
 )
 
 # =====================================
@@ -324,7 +324,7 @@ with tab_box:
                     continue
 
                 counts = d["연식그룹"].value_counts()
-                counts = counts.reindex(["신·중축", "구축"])
+                counts = counts.reindex(["구축", "신·중축"])
                 ratios = counts / counts.sum() * 100
 
                 ax.bar(ratios.index, ratios.values)
@@ -690,3 +690,96 @@ with tab_qq:
         "- 서울 전체와 각 구의 Q-Q Plot을 비교해 보면, 어떤 구에서 고가 월세 Outlier가 더 많이 나타나는지 설명할 수 있습니다.\n"
         "- 상단 입력창에 매물 이름을 입력하면, 해당 매물이 Q-Q Plot 상에서 어느 위치(극단값인지/평균 근처인지)에 있는지 확인할 수 있습니다."
     )
+
+# =====================================
+# 5. BoxPlot – 서울 vs 구A vs 구B (가격)
+# =====================================
+with tab_price_box:
+    st.subheader("5. BoxPlot - 서울 vs 구A vs 구B 가격 비교 (중앙값/사분위수/IQR)")
+
+    if "가격" not in df_filtered.columns:
+        st.warning("데이터에 '가격' 컬럼이 없어 BoxPlot을 그릴 수 없습니다.")
+    else:
+        trim_pct = st.slider(
+            "상위 이상치 제거(%) — 서울 전체 기준 상위 n%를 잘라내고 박스만 보기",
+            min_value=0,
+            max_value=30,
+            value=5,
+            step=5,
+        )
+
+        # 서울 전체 기준 컷(상위 trim_pct% 제거)
+        base = seoul["가격"].dropna()
+        if base.empty:
+            st.warning("가격 데이터가 없습니다.")
+        else:
+            if trim_pct == 0:
+                cutoff = base.max()
+            else:
+                cutoff = np.percentile(base.values, 100 - trim_pct)
+
+            def prep_price(d: pd.DataFrame) -> pd.Series:
+                s = d["가격"].dropna()
+                s = s[s > 0]
+                s = s[s <= cutoff]
+                return s
+
+            s_seoul = prep_price(seoul)
+            s_a = prep_price(df_a)
+            s_b = prep_price(df_b)
+
+            if min(len(s_seoul), len(s_a), len(s_b)) < 10:
+                st.warning("비교할 데이터가 부족합니다. (각 그룹 최소 10개 이상 권장)")
+            else:
+                fig5, ax5 = plt.subplots(1, 1, figsize=(10, 5))
+
+                ax5.boxplot(
+                    [s_seoul.values, s_a.values, s_b.values],
+                    labels=["서울 전체", gu_a, gu_b],
+                    showfliers=False,  # 점(outlier) 표시 X → 박스가 더 잘 보이게
+                )
+
+                ax5.set_title(
+                    f"가격 BoxPlot (서울 기준 상위 {trim_pct}% 제거, cutoff={cutoff:.0f})",
+                    fontproperties=font_prop,
+                )
+                ax5.set_ylabel("가격", fontproperties=font_prop)
+
+                for tick in ax5.get_xticklabels():
+                    tick.set_fontproperties(font_prop)
+                for tick in ax5.get_yticklabels():
+                    tick.set_fontproperties(font_prop)
+
+                plt.tight_layout()
+                st.pyplot(fig5)
+
+                # 요약 통계 (Q1/Q2/Q3/IQR)
+                def summarize(label: str, s: pd.Series) -> dict:
+                    q1 = np.percentile(s, 25)
+                    q2 = np.percentile(s, 50)
+                    q3 = np.percentile(s, 75)
+                    return {
+                        "구분": label,
+                        "표본수": int(len(s)),
+                        "1분위(Q1)": float(q1),
+                        "중앙값(Q2)": float(q2),
+                        "3분위(Q3)": float(q3),
+                        "IQR(Q3-Q1)": float(q3 - q1),
+                    }
+
+                summary_df = pd.DataFrame(
+                    [
+                        summarize("서울 전체", s_seoul),
+                        summarize(gu_a, s_a),
+                        summarize(gu_b, s_b),
+                    ]
+                )
+
+                st.write("##### 요약 통계 (사분위수·중앙값·IQR)")
+                st.dataframe(summary_df)
+
+                st.caption(
+                    "- **중앙값(Q2)**이 더 높은 구는 `대부분의 매물 가격 수준이 더 높다`고 해석할 수 있습니다.\n"
+                    "- **IQR(Q3−Q1)**이 더 넓은 구는 `가격대가 더 다양(분산/양극화 가능)`하다고 해석할 수 있습니다.\n"
+                    "- 슬라이더로 서울 전체 기준 상위 극단값을 잘라내면, 박스(중간 50%) 구조가 더 선명해집니다."
+                )
